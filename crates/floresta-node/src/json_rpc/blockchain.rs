@@ -12,6 +12,9 @@ use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Script;
 use bitcoin::ScriptBuf;
+use bitcoin::Transaction;
+use bitcoin::TxIn;
+use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::VarInt;
 use bitcoin::block::Header;
@@ -21,9 +24,16 @@ use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use ethos_bitcoind::DeploymentInfo;
-use ethos_bitcoind::GetBlockHeaderVerbose;
-use ethos_bitcoind::GetBlockVerboseOne;
 use ethos_bitcoind::GetBlockCoinbaseTx;
+use ethos_bitcoind::GetBlockHeaderVerbose;
+use ethos_bitcoind::GetBlockObject2;
+use ethos_bitcoind::GetBlockObject3;
+use ethos_bitcoind::GetBlockScriptPubKey;
+use ethos_bitcoind::GetBlockScriptSig;
+use ethos_bitcoind::GetBlockTx;
+use ethos_bitcoind::GetBlockVerboseOne;
+use ethos_bitcoind::GetBlockVin;
+use ethos_bitcoind::GetBlockVout;
 use ethos_bitcoind::GetBlockchainInfo;
 use ethos_bitcoind::GetDeploymentInfo;
 use ethos_bitcoind::GetTxOut;
@@ -203,71 +213,138 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         if verbosity == 0 {
             let hex = serialize_hex(&block);
-
             return Ok(GetBlockRes::String(hex));
         }
+
+        let header_fields = self.get_block_header_verbose_inner(&block)?;
+
+        // Stripped size is the size of the block without witness data
+        // Header + VarInt for number of transactions + sum of base sizes of each transaction
+        let tx_count_varint_size = VarInt::from(block.txdata.len()).size();
+        let total_tx_base_size: usize = block.txdata.iter().map(|tx| tx.base_size()).sum();
+        let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
+        let stripped_size = stripped_size_bytes.try_into()?;
+        let size = block.total_size().try_into()?;
+        let weight = block.weight().to_wu();
+        let coinbase_tx = Self::make_block_coinbase_tx(&block)?;
+
         if verbosity == 1 {
-            let header_fields = self.get_block_header_verbose_inner(&block)?;
-
-            // Stripped size is the size of the block without witness data
-            // Header + VarInt for number of transactions + sum of base sizes of each transaction
-            let tx_count_varint_size = VarInt::from(block.txdata.len()).size();
-            let total_tx_base_size: usize = block.txdata.iter().map(|tx| tx.base_size()).sum();
-            let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
-
-            let stripped_size = stripped_size_bytes.try_into()?;
-
             let tx = block
                 .txdata
                 .iter()
                 .map(|tx| tx.compute_txid().to_string())
                 .collect();
 
-            let coinbase = block
-                .txdata
-                .first()
-                .ok_or(JsonRpcError::Chain)?;
-            let coinbase_input = coinbase
-                .input
-                .first()
-                .ok_or(JsonRpcError::Chain)?;
-            let coinbase_tx = GetBlockCoinbaseTx {
-                coinbase: coinbase_input.script_sig.to_hex_string(),
-                lock_time: coinbase.lock_time.to_consensus_u32(),
-                sequence: u64::from(coinbase_input.sequence.to_consensus_u32()),
-                version: coinbase.version.0 as u32,
-                witness: coinbase_input
-                    .witness
-                    .nth(0)
-                    .map(|w| w.to_lower_hex_string()),
-            };
-
-            let block = GetBlockVerboseOne {
-                bits: header_fields.bits,
-                chain_work: header_fields.chain_work,
-                coinbase_tx,
+            return Ok(GetBlockRes::Object(GetBlockVerboseOne {
+                bits: header_fields.bits.clone(),
+                chain_work: header_fields.chain_work.clone(),
+                coinbase_tx: coinbase_tx.clone(),
                 confirmations: header_fields.confirmations,
                 difficulty: header_fields.difficulty,
-                hash: header_fields.hash,
+                hash: header_fields.hash.clone(),
                 height: header_fields.height,
-                merkle_root: header_fields.merkle_root,
+                merkle_root: header_fields.merkle_root.clone(),
                 nonce: header_fields.nonce,
-                previous_block_hash: header_fields.previous_block_hash,
-                size: block.total_size().try_into()?,
+                previous_block_hash: header_fields.previous_block_hash.clone(),
+                size,
                 time: header_fields.time,
                 tx,
                 version: header_fields.version,
-                version_hex: header_fields.version_hex,
-                weight: block.weight().to_wu(),
+                version_hex: header_fields.version_hex.clone(),
+                weight,
                 median_time: header_fields.median_time,
                 n_tx: header_fields.n_tx,
-                next_block_hash: header_fields.next_block_hash,
+                next_block_hash: header_fields.next_block_hash.clone(),
                 stripped_size,
-                target: header_fields.target,
-            };
-
-            return Ok(GetBlockRes::Object(block));
+                target: header_fields.target.clone(),
+            }));
         }
+
+        // Verbosity 2: full transaction objects. Verbosity 3: same until ethos
+        // OpenRPC codegen wires `prevout` on vin (Core runtime already has it;
+        // discriminator metadata lands via bitcoin/bitcoin#36175).
+        if verbosity == 2 || verbosity == 3 {
+            let tx = block
+                .txdata
+                .iter()
+                .map(|tx| self.make_block_tx(tx))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let shared = (
+                header_fields.bits,
+                header_fields.chain_work,
+                coinbase_tx,
+                header_fields.confirmations,
+                header_fields.difficulty,
+                header_fields.hash,
+                header_fields.height,
+                header_fields.merkle_root,
+                header_fields.nonce,
+                header_fields.previous_block_hash,
+                size,
+                header_fields.time,
+                tx,
+                header_fields.version,
+                header_fields.version_hex,
+                weight,
+                header_fields.median_time,
+                header_fields.n_tx,
+                header_fields.next_block_hash,
+                stripped_size,
+                header_fields.target,
+            );
+
+            if verbosity == 2 {
+                return Ok(GetBlockRes::Object2(GetBlockObject2 {
+                    bits: shared.0,
+                    chain_work: shared.1,
+                    coinbase_tx: shared.2,
+                    confirmations: shared.3,
+                    difficulty: shared.4,
+                    hash: shared.5,
+                    height: shared.6,
+                    merkle_root: shared.7,
+                    nonce: shared.8,
+                    previous_block_hash: shared.9,
+                    size: shared.10,
+                    time: shared.11,
+                    tx: shared.12,
+                    version: shared.13,
+                    version_hex: shared.14,
+                    weight: shared.15,
+                    median_time: shared.16,
+                    n_tx: shared.17,
+                    next_block_hash: shared.18,
+                    stripped_size: shared.19,
+                    target: shared.20,
+                }));
+            }
+
+            return Ok(GetBlockRes::Object3(GetBlockObject3 {
+                bits: shared.0,
+                chain_work: shared.1,
+                coinbase_tx: shared.2,
+                confirmations: shared.3,
+                difficulty: shared.4,
+                hash: shared.5,
+                height: shared.6,
+                merkle_root: shared.7,
+                nonce: shared.8,
+                previous_block_hash: shared.9,
+                size: shared.10,
+                time: shared.11,
+                tx: shared.12,
+                version: shared.13,
+                version_hex: shared.14,
+                weight: shared.15,
+                median_time: shared.16,
+                n_tx: shared.17,
+                next_block_hash: shared.18,
+                stripped_size: shared.19,
+                target: shared.20,
+            }));
+        }
+
         Err(JsonRpcError::InvalidVerbosityLevel)
     }
 
@@ -441,6 +518,99 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getmempoolentry
     // getmempoolinfo
     // getrawmempool
+
+    fn make_block_coinbase_tx(block: &Block) -> Result<GetBlockCoinbaseTx, JsonRpcError> {
+        let coinbase = block.txdata.first().ok_or(JsonRpcError::Chain)?;
+        let coinbase_input = coinbase.input.first().ok_or(JsonRpcError::Chain)?;
+        Ok(GetBlockCoinbaseTx {
+            coinbase: coinbase_input.script_sig.to_hex_string(),
+            lock_time: coinbase.lock_time.to_consensus_u32(),
+            sequence: u64::from(coinbase_input.sequence.to_consensus_u32()),
+            version: coinbase.version.0 as u32,
+            witness: coinbase_input
+                .witness
+                .nth(0)
+                .map(|w| w.to_lower_hex_string()),
+        })
+    }
+
+    fn make_block_vin(input: &TxIn, is_coinbase: bool) -> GetBlockVin {
+        let sequence = u64::from(input.sequence.to_consensus_u32());
+        let tx_in_witness = (!input.witness.is_empty()).then_some(
+            input
+                .witness
+                .iter()
+                .map(|w| w.to_hex_string(bitcoin::hex::Case::Lower))
+                .collect(),
+        );
+
+        if is_coinbase {
+            return GetBlockVin {
+                coinbase: Some(input.script_sig.to_hex_string()),
+                sequence,
+                tx_in_witness,
+                script_sig: None,
+                txid: None,
+                vout: None,
+            };
+        }
+
+        GetBlockVin {
+            coinbase: None,
+            txid: Some(input.previous_output.txid),
+            vout: Some(u64::from(input.previous_output.vout)),
+            script_sig: Some(GetBlockScriptSig {
+                asm: to_core_asm_string(&input.script_sig, true),
+                hex: input.script_sig.to_hex_string(),
+            }),
+            tx_in_witness,
+            sequence,
+        }
+    }
+
+    fn make_block_vout(&self, output: &TxOut, index: u32) -> GetBlockVout {
+        let address = Address::from_script(&output.script_pubkey, self.network).ok();
+        GetBlockVout {
+            value: output.value,
+            n: index,
+            script_pubkey: GetBlockScriptPubKey {
+                asm: to_core_asm_string(&output.script_pubkey, false),
+                hex: output.script_pubkey.to_hex_string(),
+                address: address.as_ref().map(ToString::to_string),
+                r#type: Self::get_script_type_label(&output.script_pubkey).to_string(),
+                desc: Self::get_script_type_descriptor(&output.script_pubkey, &address),
+            },
+        }
+    }
+
+    fn make_block_tx(&self, tx: &Transaction) -> Result<GetBlockTx, JsonRpcError> {
+        let is_coinbase = tx.is_coinbase();
+        Ok(GetBlockTx {
+            // Pruned / wallet-only context: fee needs spent prevouts. Omit like Core when unknown.
+            fee: None,
+            hash: tx.compute_wtxid().to_string(),
+            hex: serialize_hex(tx),
+            lock_time: u64::from(tx.lock_time.to_consensus_u32()),
+            size: tx.total_size().try_into()?,
+            txid: tx.compute_txid(),
+            version: tx.version.0 as u32,
+            vin: tx
+                .input
+                .iter()
+                .map(|input| Self::make_block_vin(input, is_coinbase))
+                .collect(),
+            vout: tx
+                .output
+                .iter()
+                .enumerate()
+                .map(|(i, output)| -> Result<GetBlockVout, JsonRpcError> {
+                    Ok(self.make_block_vout(output, i.try_into()?))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            v_size: tx.vsize().try_into()?,
+            weight: tx.weight().to_wu(),
+        })
+    }
 
     /// Same as `get_block_header_inner` but verbose.
     fn get_block_header_verbose_inner(
