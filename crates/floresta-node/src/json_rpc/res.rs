@@ -23,9 +23,9 @@
 
 use core::fmt::Debug;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-use corepc_types::v30::GetRawTransactionVerbose;
+use ethos_bitcoind::GetBlockHeaderVerbose;
+use ethos_bitcoind::GetBlockVerboseOne;
+use ethos_bitcoind::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 

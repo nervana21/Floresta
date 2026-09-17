@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use corepc_types::v26::AddrManInfoNetwork;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v30::GetNetworkInfoNetwork;
+use ethos_bitcoind::AddrManInfoNetwork;
+use ethos_bitcoind::GetAddrManInfo;
+use ethos_bitcoind::GetNetworkInfo;
+use ethos_bitcoind::GetNetworkInfoNetwork;
 use floresta_common::PROTOCOL_VERSION;
 use floresta_common::advertised_services;
 use floresta_common::service_flags_strings;
@@ -28,7 +28,7 @@ type Result<T> = std::result::Result<T, JsonRpcError>;
 
 /// Encode a `CARGO_PKG_VERSION` string (`"<major>.<minor>.<patch>"`) as Bitcoin Core's
 /// numeric `MMmmpp` version. Returns `0` for malformed input.
-fn parse_mmmmpp(version: &str) -> usize {
+fn parse_mmmmpp(version: &str) -> u32 {
     let mut parts = version.splitn(3, '.');
 
     let major = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
@@ -210,20 +210,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         Ok(GetNetworkInfo {
             version,
             subversion: self.user_agent.clone(),
-            protocol_version: PROTOCOL_VERSION as usize,
+            protocol_version: u64::from(PROTOCOL_VERSION),
             local_services,
             local_services_names,
             local_relay: false,
             time_offset: 0,
-            connections: connections_in + connections_out,
-            connections_in,
-            connections_out,
+            connections: u64::try_from(connections_in + connections_out)
+                .map_err(|_| JsonRpcError::Node("connection count overflow".to_string()))?,
+            connections_in: u64::try_from(connections_in)
+                .map_err(|_| JsonRpcError::Node("connection count overflow".to_string()))?,
+            connections_out: u64::try_from(connections_out)
+                .map_err(|_| JsonRpcError::Node("connection count overflow".to_string()))?,
             network_active: true,
             networks,
             // Floresta's mempool has no fee policy yet, so relay_fee and incremental_fee are hardcoded to 0.
             relay_fee: 0.0,
             incremental_fee: 0.0,
             local_addresses: Vec::new(), // Floresta doesn't track local addresses since it does not accept inbound connections
+            // Core 32 required keys Floresta does not model yet (empty / zero stubs).
+            // Ethos types require these; omit is not allowed on the wire schema.
+            inv_buckets: BTreeMap::new(),
+            // Core -asmap only. Floresta has no asmap. Omit on the wire.
+            asmap_version: None,
+            tx_send_rate: 0,
             warnings: self
                 .chain
                 .get_warnings()
