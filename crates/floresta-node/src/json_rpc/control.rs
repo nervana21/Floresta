@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::path::PathBuf;
-
-use serde::Deserialize;
-use serde::Serialize;
+use ethos_bitcoind::GetMemoryInfoLocked;
+use ethos_bitcoind::GetMemoryInfoResponse as GetMemInfoRes;
+use ethos_bitcoind::GetMemoryInfoResponseGetMemoryInfoObject as GetMemInfoStats;
+use ethos_bitcoind::GetRpcInfoActiveCommands as ActiveCommand;
+use ethos_bitcoind::GetRpcInfoResponse as GetRpcInfoRes;
 
 use super::res::jsonrpc_interface::JsonRpcError;
 use super::server::RpcChain;
@@ -17,7 +18,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 let info = unsafe { libc::mallinfo() };
 
                 let stats = GetMemInfoStats {
-                    locked: MemInfoLocked {
+                    locked: GetMemoryInfoLocked {
                         used: info.uordblks as u64,
                         free: info.fordblks as u64,
                         total: (info.uordblks + info.fordblks) as u64,
@@ -27,7 +28,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     },
                 };
 
-                Ok(GetMemInfoRes::Stats(stats))
+                Ok(GetMemInfoRes::Object(stats))
             }
 
             "mallocinfo" => {
@@ -44,7 +45,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     info.smblks,
                 );
 
-                Ok(GetMemInfoRes::MallocInfo(info_str))
+                Ok(GetMemInfoRes::String(info_str))
             }
 
             _ => Err(JsonRpcError::InvalidMemInfoMode),
@@ -59,7 +60,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 }
 
                 let stats = GetMemInfoStats {
-                    locked: MemInfoLocked {
+                    locked: GetMemoryInfoLocked {
                         used: info.size_in_use as u64,
                         free: info.size_allocated.saturating_sub(info.size_in_use) as u64,
                         total: info.size_allocated as u64,
@@ -69,7 +70,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     },
                 };
 
-                Ok(GetMemInfoRes::Stats(stats))
+                Ok(GetMemInfoRes::Object(stats))
             }
             "mallocinfo" => {
                 // A XML with the allocator statistics
@@ -89,7 +90,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                     0
                 );
 
-                Ok(GetMemInfoRes::MallocInfo(info_str))
+                Ok(GetMemInfoRes::String(info_str))
             }
             _ => Err(JsonRpcError::InvalidMemInfoMode),
         }
@@ -97,8 +98,17 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         #[cfg(not(any(target_env = "gnu", target_os = "macos")))]
         // Just return zeroed stats for non-GNU and non-MacOS targets
         match mode {
-            "stats" => Ok(GetMemInfoRes::Stats(GetMemInfoStats::default())),
-            "mallocinfo" => Ok(GetMemInfoRes::MallocInfo(String::new())),
+            "stats" => Ok(GetMemInfoRes::Object(GetMemInfoStats {
+                locked: GetMemoryInfoLocked {
+                    used: 0,
+                    free: 0,
+                    total: 0,
+                    locked: 0,
+                    chunks_used: 0,
+                    chunks_free: 0,
+                },
+            })),
+            "mallocinfo" => Ok(GetMemInfoRes::String(String::new())),
             _ => Err(JsonRpcError::InvalidMemInfoMode),
         }
     }
@@ -117,7 +127,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         Ok(GetRpcInfoRes {
             active_commands,
-            logpath: self.log_path.clone(),
+            logpath: self.log_path.display().to_string(),
         })
     }
 
@@ -135,38 +145,4 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     pub(super) fn uptime(&self) -> u64 {
         self.start_time.elapsed().as_secs()
     }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GetMemInfoStats {
-    locked: MemInfoLocked,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct MemInfoLocked {
-    used: u64,
-    free: u64,
-    total: u64,
-    locked: u64,
-    chunks_used: u64,
-    chunks_free: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum GetMemInfoRes {
-    Stats(GetMemInfoStats),
-    MallocInfo(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ActiveCommand {
-    method: String,
-    duration: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetRpcInfoRes {
-    active_commands: Vec<ActiveCommand>,
-    logpath: PathBuf,
 }

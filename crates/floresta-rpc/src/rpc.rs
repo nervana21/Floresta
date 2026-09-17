@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn test_get_memory_info() {
         let client = MockRpcClient::new();
-        let memory_info = GetMemInfoRes::MallocInfo("Malloc".to_string());
+        let memory_info = GetMemInfoRes::String("Malloc".to_string());
         let expected_result = serde_json::to_value(&memory_info).unwrap();
         client.set_result(expected_result.clone());
 
@@ -1031,7 +1031,7 @@ mod tests {
     fn test_get_rpc_info() {
         let client = MockRpcClient::new();
         let rpc_info = GetRpcInfoRes {
-            logpath: "logpath".to_string().into(),
+            logpath: "logpath".to_string(),
             active_commands: Vec::new(),
         };
         let expected_result = serde_json::to_value(&rpc_info).unwrap();

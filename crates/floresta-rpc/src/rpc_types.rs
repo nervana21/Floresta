@@ -4,7 +4,6 @@ use core::error;
 use core::fmt;
 use core::fmt::Display;
 use core::fmt::Formatter;
-use std::path::PathBuf;
 
 pub use ethos_bitcoind::GetNetworkInfo;
 use serde::Deserialize;
@@ -149,48 +148,16 @@ impl Display for Error {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GetMemInfoStats {
-    pub locked: MemInfoLocked,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct MemInfoLocked {
-    /// Memory currently in use, in bytes
-    pub used: u64,
-    /// Memory currently free, in bytes
-    pub free: u64,
-    /// Total memory allocated, in bytes
-    pub total: u64,
-    /// Total memory locked, in bytes
-    ///
-    /// If total is less than total, then some pages may be on swap or not philysically allocated
-    /// yet
-    pub locked: u64,
-    /// How many chunks are currently in use
-    pub chunks_used: u64,
-    /// How many chunks are currently free
-    pub chunks_free: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum GetMemInfoRes {
-    Stats(GetMemInfoStats),
-    MallocInfo(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ActiveCommand {
-    pub method: String,
-    pub duration: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetRpcInfoRes {
-    pub active_commands: Vec<ActiveCommand>,
-    pub logpath: PathBuf,
-}
+/// Core-shaped `getmemoryinfo` result.
+pub type GetMemInfoRes = ethos_bitcoind::GetMemoryInfoResponse;
+/// Stats object arm of `getmemoryinfo`.
+pub type GetMemInfoStats = ethos_bitcoind::GetMemoryInfoResponseGetMemoryInfoObject;
+/// Locked-memory counters inside `getmemoryinfo` stats.
+pub type MemInfoLocked = ethos_bitcoind::GetMemoryInfoLocked;
+/// Active RPC command row in `getrpcinfo`.
+pub type ActiveCommand = ethos_bitcoind::GetRpcInfoActiveCommands;
+/// Core-shaped `getrpcinfo` result.
+pub type GetRpcInfoRes = ethos_bitcoind::GetRpcInfoResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
