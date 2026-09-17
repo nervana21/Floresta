@@ -111,10 +111,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .ok_or(JsonRpcError::TxNotFound)?;
 
         match verbosity {
-            0 => Ok(GetRawTransactionRes::Zero(serialize_hex(&tx.tx))),
-            1 => Ok(GetRawTransactionRes::One(Box::new(
-                self.make_raw_transaction(tx)?,
-            ))),
+            0 => Ok(GetRawTransactionRes::String(serialize_hex(&tx.tx))),
+            1 => Ok(GetRawTransactionRes::Object(self.make_raw_transaction(tx)?)),
             _ => Err(JsonRpcError::InvalidVerbosityLevel),
         }
     }

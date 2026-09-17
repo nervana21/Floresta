@@ -204,7 +204,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         if verbosity == 0 {
             let hex = serialize_hex(&block);
 
-            return Ok(GetBlockRes::Zero(hex));
+            return Ok(GetBlockRes::String(hex));
         }
         if verbosity == 1 {
             let header_fields = self.get_block_header_verbose_inner(&block)?;
@@ -266,7 +266,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 target: header_fields.target,
             };
 
-            return Ok(GetBlockRes::One(Box::new(block)));
+            return Ok(GetBlockRes::Object(block));
         }
         Err(JsonRpcError::InvalidVerbosityLevel)
     }
@@ -366,14 +366,14 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         if !verbosity {
             let hex = serialize_hex(&header);
-            return Ok(GetBlockHeaderRes::Raw(hex));
+            return Ok(GetBlockHeaderRes::String(hex));
         }
 
         let block = self.get_block_inner(hash).await?;
 
         let get_block_header = self.get_block_header_verbose_inner(&block)?;
 
-        Ok(GetBlockHeaderRes::Verbose(Box::new(get_block_header)))
+        Ok(GetBlockHeaderRes::Object(get_block_header))
     }
 
     // getblockstats
