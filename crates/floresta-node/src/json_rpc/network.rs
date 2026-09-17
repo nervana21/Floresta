@@ -227,8 +227,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             relay_fee: 0.0,
             incremental_fee: 0.0,
             local_addresses: Vec::new(), // Floresta doesn't track local addresses since it does not accept inbound connections
-            // Core 32 required keys Floresta does not model yet (empty / zero stubs).
-            // Ethos types require these; omit is not allowed on the wire schema.
+            // No inbound peers and no Core-style INV token buckets yet.
+            // Schema requires the keys; empty map / zero is the honest stub.
             inv_buckets: BTreeMap::new(),
             // Core -asmap only. Floresta has no asmap. Omit on the wire.
             asmap_version: None,

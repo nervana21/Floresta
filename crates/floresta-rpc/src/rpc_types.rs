@@ -192,8 +192,17 @@ impl error::Error for Error {}
 
 #[cfg(test)]
 mod ethos_wire_tests {
+    use std::collections::BTreeMap;
+
     use bitcoin::Amount;
-    use ethos_bitcoind::{GetTxOut, ScriptPubKey};
+    use ethos_bitcoind::GetBlockchainInfo;
+    use ethos_bitcoind::GetMemoryInfoLocked;
+    use ethos_bitcoind::GetMemoryInfoResponse;
+    use ethos_bitcoind::GetMemoryInfoResponseGetMemoryInfoObject;
+    use ethos_bitcoind::GetNetworkInfo;
+    use ethos_bitcoind::GetRpcInfoResponse;
+    use ethos_bitcoind::GetTxOut;
+    use ethos_bitcoind::ScriptPubKey;
     use serde_json::json;
 
     #[test]
@@ -217,5 +226,91 @@ mod ethos_wire_tests {
             v["scriptPubKey"].get("address").is_none(),
             "nested Option None must omit, not null: {v}"
         );
+    }
+
+    #[test]
+    fn get_blockchain_info_omits_none_optionals() {
+        let info = GetBlockchainInfo {
+            chain: "regtest".to_string(),
+            blocks: 0,
+            headers: 0,
+            best_block_hash: "00".repeat(32),
+            difficulty: 1.0,
+            automatic_pruning: None,
+            bits: "1d00ffff".to_string(),
+            chain_work: "00".to_string(),
+            initial_block_download: false,
+            median_time: 0,
+            prune_height: None,
+            prune_target_size: None,
+            pruned: false,
+            signet_challenge: None,
+            size_on_disk: 0,
+            target: "00".to_string(),
+            time: 0,
+            verification_progress: 1.0,
+            warnings: vec![],
+            backgroundvalidation: None,
+        };
+        let v = serde_json::to_value(&info).expect("serialize GetBlockchainInfo");
+        assert!(v.get("backgroundvalidation").is_none());
+        assert!(v.get("automatic_pruning").is_none());
+        assert_eq!(v["bestblockhash"], json!("00".repeat(32)));
+    }
+
+    #[test]
+    fn get_memory_info_stats_and_malloc_arms() {
+        let stats = GetMemoryInfoResponse::Object(GetMemoryInfoResponseGetMemoryInfoObject {
+            locked: GetMemoryInfoLocked {
+                used: 1,
+                free: 2,
+                total: 3,
+                locked: 3,
+                chunks_used: 4,
+                chunks_free: 5,
+            },
+        });
+        let v = serde_json::to_value(&stats).expect("serialize memory stats");
+        assert_eq!(v["locked"]["used"], json!(1));
+
+        let malloc = GetMemoryInfoResponse::String("<malloc/>".to_string());
+        let v = serde_json::to_value(&malloc).expect("serialize mallocinfo");
+        assert_eq!(v, json!("<malloc/>"));
+    }
+
+    #[test]
+    fn get_rpc_info_and_network_info_core_keys() {
+        let rpc = GetRpcInfoResponse {
+            active_commands: vec![],
+            logpath: "/tmp/debug.log".to_string(),
+        };
+        let v = serde_json::to_value(&rpc).expect("serialize getrpcinfo");
+        assert_eq!(v["logpath"], json!("/tmp/debug.log"));
+
+        let net = GetNetworkInfo {
+            version: 900,
+            subversion: "/Floresta:0.9.0/".to_string(),
+            protocol_version: 70016,
+            local_services: "0".to_string(),
+            local_services_names: vec![],
+            local_relay: false,
+            time_offset: 0,
+            connections: 0,
+            connections_in: 0,
+            connections_out: 0,
+            network_active: true,
+            networks: vec![],
+            relay_fee: 0.0,
+            incremental_fee: 0.0,
+            local_addresses: vec![],
+            inv_buckets: BTreeMap::new(),
+            asmap_version: None,
+            tx_send_rate: 0,
+            warnings: vec![],
+        };
+        let v = serde_json::to_value(&net).expect("serialize getnetworkinfo");
+        assert_eq!(v["inv_buckets"], json!({}));
+        assert_eq!(v["tx_send_rate"], json!(0));
+        assert_eq!(v["protocolversion"], json!(70016));
     }
 }
