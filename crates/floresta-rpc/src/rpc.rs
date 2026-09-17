@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn test_get_block_header() {
         let client: MockRpcClient = MockRpcClient::new();
-        let block_header = GetBlockHeaderRes::Raw("Header".to_string());
+        let block_header = GetBlockHeaderRes::String("Header".to_string());
         let expected_result = serde_json::to_value(block_header).unwrap();
         client.set_result(expected_result.clone());
 
@@ -602,7 +602,7 @@ mod tests {
     fn test_get_transaction() {
         let client = MockRpcClient::new();
         let expected_result: GetRawTransactionRes =
-            GetRawTransactionRes::Zero("transactionhex".to_string());
+            GetRawTransactionRes::String("transactionhex".to_string());
         let expected_result_serialize = serde_json::to_value(expected_result).unwrap();
         client.set_result(expected_result_serialize.clone());
 
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn test_get_block() {
         let client = MockRpcClient::new();
-        let get_block = GetBlockRes::Zero("block".to_string());
+        let get_block = GetBlockRes::String("block".to_string());
         let expected_result = serde_json::to_value(&get_block).unwrap();
         client.set_result(expected_result.clone());
 

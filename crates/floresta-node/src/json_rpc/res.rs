@@ -23,9 +23,9 @@
 
 use core::fmt::Debug;
 
-use ethos_bitcoind::GetBlockHeaderVerbose;
-use ethos_bitcoind::GetBlockVerboseOne;
-use ethos_bitcoind::GetRawTransactionVerbose;
+pub use ethos_bitcoind::GetBlockHeaderResponse as GetBlockHeaderRes;
+pub use ethos_bitcoind::GetBlockResponse as GetBlockRes;
+pub use ethos_bitcoind::GetRawTransactionResponse as GetRawTransactionRes;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -560,33 +560,6 @@ impl RescanConfidence {
             Self::High => 2_760,
         }
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetRawTransactionRes {
-    Zero(String),
-
-    One(Box<GetRawTransactionVerbose>),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetBlockRes {
-    Zero(String),
-    One(Box<GetBlockVerboseOne>),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-/// The response for `getblockheader`, which can be either a raw hex-encoded block header or a verbose
-/// one with all the fields parsed and decoded.
-pub enum GetBlockHeaderRes {
-    /// The raw hex-encoded block header, as returned by `getblockheader` with verbosity false
-    Raw(String),
-
-    /// A verbose block header, as returned by `getblockheader` with verbosity true
-    Verbose(Box<GetBlockHeaderVerbose>),
 }
 
 /// Return type for the `gettxoutproof` rpc command, the internal is

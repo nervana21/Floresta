@@ -225,7 +225,7 @@ mod tests {
                 .unwrap();
 
         let block = client.get_block(block_hash, Some(1)).unwrap();
-        let GetBlockRes::One(block) = block else {
+        let GetBlockRes::Object(block) = block else {
             panic!("Expected verbose block");
         };
 
@@ -257,7 +257,7 @@ mod tests {
         let block_header = client
             .get_block_header(blockhash, Some(true))
             .expect("rpc not working");
-        let GetBlockHeaderRes::Verbose(block_header) = block_header else {
+        let GetBlockHeaderRes::Object(block_header) = block_header else {
             panic!("Expected verbose block header");
         };
 

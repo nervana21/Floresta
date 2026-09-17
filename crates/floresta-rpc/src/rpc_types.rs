@@ -6,10 +6,7 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
 
-use ethos_bitcoind::GetBlockHeaderVerbose;
-use ethos_bitcoind::GetBlockVerboseOne;
 pub use ethos_bitcoind::GetNetworkInfo;
-use ethos_bitcoind::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,14 +15,6 @@ use serde::Serialize;
 /// the hex-encoded representation of the Merkle Block, as defined
 /// by Bitcoin Core.
 pub struct GetTxOutProof(pub String);
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetRawTransactionRes {
-    Zero(String),
-
-    One(Box<GetRawTransactionVerbose>),
-}
 
 /// General information about our peers. Returned by get_peer_info
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,25 +61,14 @@ pub struct PeerInfo {
     pub transport_protocol: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum GetBlockRes {
-    Zero(String),
+/// Core-shaped `getblock` result (verbosity 0–3).
+pub type GetBlockRes = ethos_bitcoind::GetBlockResponse;
 
-    One(Box<GetBlockVerboseOne>),
-}
+/// Core-shaped `getblockheader` result.
+pub type GetBlockHeaderRes = ethos_bitcoind::GetBlockHeaderResponse;
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-/// The response for getblockheader, which can be either a raw hex-encoded block header or a verbose
-/// one with all the fields parsed and decoded.
-pub enum GetBlockHeaderRes {
-    /// The raw hex-encoded block header, as returned by getblockheader with verbosity false
-    Raw(String),
-
-    /// A verbose block header, as returned by getblockheader with verbosity true
-    Verbose(Box<GetBlockHeaderVerbose>),
-}
+/// Core-shaped `getrawtransaction` result.
+pub type GetRawTransactionRes = ethos_bitcoind::GetRawTransactionResponse;
 
 /// A confidence enum to auxiliate rescan timestamp values.
 ///
