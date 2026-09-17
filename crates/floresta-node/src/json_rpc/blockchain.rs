@@ -20,13 +20,14 @@ use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
-use corepc_types::ScriptPubKey;
-use corepc_types::v29::GetTxOut;
-use corepc_types::v30::DeploymentInfo;
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
+use ethos_bitcoind::DeploymentInfo;
+use ethos_bitcoind::GetBlockHeaderVerbose;
+use ethos_bitcoind::GetBlockVerboseOne;
+use ethos_bitcoind::GetBlockCoinbaseTx;
+use ethos_bitcoind::GetBlockchainInfo;
+use ethos_bitcoind::GetDeploymentInfo;
+use ethos_bitcoind::GetTxOut;
+use ethos_bitcoind::ScriptPubKey;
 use floresta_chain::buried_deployments_for;
 use floresta_chain::extensions::HeaderExt;
 use floresta_chain::extensions::WorkExt;
@@ -214,7 +215,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             let total_tx_base_size: usize = block.txdata.iter().map(|tx| tx.base_size()).sum();
             let stripped_size_bytes = Header::SIZE + tx_count_varint_size + total_tx_base_size;
 
-            let stripped_size = Some(stripped_size_bytes.try_into()?);
+            let stripped_size = stripped_size_bytes.try_into()?;
 
             let tx = block
                 .txdata
@@ -222,9 +223,29 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 .map(|tx| tx.compute_txid().to_string())
                 .collect();
 
+            let coinbase = block
+                .txdata
+                .first()
+                .ok_or(JsonRpcError::Chain)?;
+            let coinbase_input = coinbase
+                .input
+                .first()
+                .ok_or(JsonRpcError::Chain)?;
+            let coinbase_tx = GetBlockCoinbaseTx {
+                coinbase: coinbase_input.script_sig.to_hex_string(),
+                lock_time: coinbase.lock_time.to_consensus_u32(),
+                sequence: u64::from(coinbase_input.sequence.to_consensus_u32()),
+                version: coinbase.version.0 as u32,
+                witness: coinbase_input
+                    .witness
+                    .nth(0)
+                    .map(|w| w.to_lower_hex_string()),
+            };
+
             let block = GetBlockVerboseOne {
                 bits: header_fields.bits,
                 chain_work: header_fields.chain_work,
+                coinbase_tx,
                 confirmations: header_fields.confirmations,
                 difficulty: header_fields.difficulty,
                 hash: header_fields.hash,
@@ -238,8 +259,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 version: header_fields.version,
                 version_hex: header_fields.version_hex,
                 weight: block.weight().to_wu(),
-                median_time: Some(header_fields.median_time),
-                n_tx: header_fields.n_tx.into(),
+                median_time: header_fields.median_time,
+                n_tx: header_fields.n_tx,
                 next_block_hash: header_fields.next_block_hash,
                 stripped_size,
                 target: header_fields.target,
@@ -274,16 +295,10 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         let verification_progress = self.verification_progress(validated, &latest_header)?;
 
-        let blocks = i64::from(validated);
-        let headers = i64::from(height);
-        let best_block_hash = hash.to_string();
         let bits = latest_header.get_bits_hex();
         let target = latest_header.get_target_hex();
         let difficulty = latest_header.get_difficulty();
-        let time = i64::from(latest_header.time);
-        let median_time = i64::from(latest_header.calculate_median_time_past(&self.chain)?);
         let size_on_disk = self.chain.size_on_disk().map_err(|_| JsonRpcError::Chain)?;
-        let prune_height = Some(blocks + 1);
         let warnings = self
             .chain
             .get_warnings()
@@ -302,24 +317,27 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         Ok(GetBlockchainInfo {
             chain,
-            blocks,
-            headers,
-            best_block_hash,
+            blocks: validated.into(),
+            headers: height.into(),
+            best_block_hash: hash.to_string(),
             bits,
             target,
             difficulty,
-            time,
-            median_time,
+            time: latest_header.time.into(),
+            median_time: latest_header
+                .calculate_median_time_past(&self.chain)?
+                .into(),
             verification_progress,
             initial_block_download,
             chain_work,
             size_on_disk,
             pruned: true,
-            prune_height,
+            prune_height: Some((validated + 1).into()),
             automatic_pruning: Some(true),
             prune_target_size: Some(0),
             signet_challenge: None,
             warnings,
+            backgroundvalidation: None,
         })
     }
 
@@ -387,8 +405,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             deployments.insert(
                 name.to_string(),
                 DeploymentInfo {
-                    deployment_type: "buried".to_string(),
-                    height: Some(activation_height),
+                    r#type: "buried".to_string(),
+                    height: Some(u64::from(activation_height)),
                     active: height >= activation_height,
                     bip9: None,
                 },
@@ -397,8 +415,11 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
         Ok(GetDeploymentInfo {
             hash: target_hash.to_string(),
-            height,
+            height: u64::from(height),
             deployments,
+            // Core requires script_flags; Floresta does not yet expose per-block
+            // script verify flags (empty stub until modeled).
+            script_flags: Vec::new(),
         })
     }
 
@@ -452,7 +473,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             height: height.into(),
             median_time: median_time.into(),
             next_block_hash,
-            version: header.version.to_consensus(),
+            version: header.version.to_consensus() as u32,
             version_hex,
             previous_block_hash,
             merkle_root: header.merkle_root.to_string(),
@@ -574,19 +595,17 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 let script_pubkey = ScriptPubKey {
                     asm,
                     hex: txout.script_pubkey.to_hex_string(),
-                    descriptor,
+                    // Core 32 OpenRPC models `desc` as required; fall back to the raw base
+                    // descriptor when checksum computation fails.
+                    desc: descriptor.unwrap_or(base_descriptor),
                     address: address.as_ref().map(ToString::to_string),
-                    type_: Self::get_script_type_label(script).to_string(),
-                    // Deprecated in Bitcoin Core v22, require flags in Bitcoin Core.
-                    // Set to None as not required for consensus.
-                    addresses: None,
-                    required_signatures: None,
+                    r#type: Self::get_script_type_label(script).to_string(),
                 };
 
                 Some(GetTxOut {
                     best_block: bestblock_hash.to_string(),
-                    confirmations: bestblock_height - height + 1,
-                    value: txout.value.to_btc(),
+                    confirmations: i64::from(bestblock_height - height + 1),
+                    value: txout.value,
                     script_pubkey,
                     coinbase: is_coinbase,
                 })

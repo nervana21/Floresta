@@ -259,11 +259,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e499f9fc0407f50fe98af744ab44fa67d409f76b6772e1689ec8485eb0c0f66"
 dependencies = [
  "base58ck",
- "base64 0.21.7",
  "bech32",
  "bitcoin-internals 0.3.0",
  "bitcoin-io 0.1.4",
- "bitcoin-units",
+ "bitcoin-units 0.1.3",
  "bitcoin_hashes 0.14.1",
  "hex-conservative 0.2.2",
  "hex_lit",
@@ -352,6 +351,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "346568ebaab2918487cea76dd55dae13c27bb618cdb737c952e69eb2017c4118"
 dependencies = [
  "bitcoin-internals 0.3.0",
+ "serde",
+]
+
+[[package]]
+name = "bitcoin-units"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fe8fafd73be14659c450deb64f90d2fd5a354fce366a01223a8319cf4d98b40"
+dependencies = [
+ "bitcoin-consensus-encoding 0.1.0",
+ "bitcoin-internals 0.5.0",
  "serde",
 ]
 
@@ -659,17 +669,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "corepc-types"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86c274042a89391a324ab313b5210680969d02a9fa977733c3354aea4d7a4883"
-dependencies = [
- "bitcoin",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -957,6 +956,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ethos-bitcoind"
+version = "32.0.0"
+source = "git+https://github.com/nervana21/ethos-bitcoind?branch=floresta#1606ad5a70e283c724e144a03ccb80d4c6220945"
+dependencies = [
+ "bitcoin",
+ "bitcoin-units 0.3.0",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1126,8 +1136,8 @@ version = "0.9.0"
 dependencies = [
  "axum",
  "bitcoin",
- "corepc-types",
  "dns-lookup",
+ "ethos-bitcoind",
  "floresta-chain",
  "floresta-common",
  "floresta-compact-filters",
@@ -1159,7 +1169,7 @@ version = "0.5.0"
 dependencies = [
  "bitcoin",
  "clap",
- "corepc-types",
+ "ethos-bitcoind",
  "jsonrpc",
  "rand 0.10.2",
  "rcgen",
@@ -2653,6 +2663,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

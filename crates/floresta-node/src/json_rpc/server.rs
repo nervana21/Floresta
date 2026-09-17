@@ -30,11 +30,11 @@ use bitcoin::hashes::hex::FromHex;
 use bitcoin::hex;
 use bitcoin::hex::DisplayHex;
 use bitcoin::taproot::Signature as TaprootSignature;
-use corepc_types::ScriptPubKey;
-use corepc_types::ScriptSig;
-use corepc_types::v30::GetRawTransactionVerbose;
-use corepc_types::v31::RawTransactionInput;
-use corepc_types::v31::RawTransactionOutput;
+use ethos_bitcoind::GetRawTransactionVerbose;
+use ethos_bitcoind::RawTransactionInput;
+use ethos_bitcoind::RawTransactionOutput;
+use ethos_bitcoind::RawTransactionScriptPubKey;
+use ethos_bitcoind::ScriptSig;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::NetworkExt;
 use floresta_compact_filters::flat_filters_store::FlatFiltersStore;
@@ -537,8 +537,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     }
 
     fn make_vin(&self, input: TxIn, is_coinbase: bool) -> RawTransactionInput {
-        let sequence = input.sequence.0;
-        let txin_witness = (!input.witness.is_empty()).then_some(
+        let sequence = u64::from(input.sequence.to_consensus_u32());
+        let tx_in_witness = (!input.witness.is_empty()).then_some(
             input
                 .witness
                 .iter()
@@ -550,15 +550,15 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             return RawTransactionInput {
                 coinbase: Some(input.script_sig.to_hex_string()),
                 sequence,
-                txin_witness,
+                tx_in_witness,
                 script_sig: None,
                 txid: None,
                 vout: None,
             };
         }
 
-        let txid = Some(input.previous_output.txid.to_string());
-        let vout = Some(input.previous_output.vout);
+        let txid = Some(input.previous_output.txid);
+        let vout = Some(u64::from(input.previous_output.vout));
         let script_sig = ScriptSig {
             asm: to_core_asm_string(&input.script_sig, true),
             hex: input.script_sig.to_hex_string(),
@@ -569,32 +569,25 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             txid,
             vout,
             script_sig: Some(script_sig),
-            txin_witness,
+            tx_in_witness,
             sequence,
         }
     }
 
-    fn make_vout(&self, output: TxOut, index: u64) -> RawTransactionOutput {
-        let value = output.value;
+    fn make_vout(&self, output: TxOut, index: u32) -> RawTransactionOutput {
+        let address = Address::from_script(&output.script_pubkey, self.network).ok();
         RawTransactionOutput {
-            value: value.to_btc(),
-            index,
-            script_pubkey: ScriptPubKey {
+            value: output.value,
+            n: index,
+            script_pubkey: RawTransactionScriptPubKey {
                 asm: to_core_asm_string(&output.script_pubkey, false),
                 hex: output.script_pubkey.to_hex_string(),
                 // `Address::from_script` can fail for nonstandard scripts. Bitcoin Core
                 // omits the `address` field entirely when `ExtractDestination` fails:
                 // https://github.com/bitcoin/bitcoin/blob/f50d53c84736f8ada8419346c4d1734d5a6686d4/src/core_io.cpp#L424
-                address: Address::from_script(&output.script_pubkey, self.network)
-                    .map(|a| a.to_string())
-                    .ok(),
-                type_: Self::get_script_type_label(&output.script_pubkey).to_string(),
-                descriptor: Some(Self::get_script_type_descriptor(
-                    &output.script_pubkey,
-                    &Address::from_script(&output.script_pubkey, self.network).ok(),
-                )),
-                required_signatures: None, // This field is deprecated in Core v22
-                addresses: None,           // This field is deprecated in Core v22
+                address: address.as_ref().map(ToString::to_string),
+                r#type: Self::get_script_type_label(&output.script_pubkey).to_string(),
+                desc: Self::get_script_type_descriptor(&output.script_pubkey, &address),
             },
         }
     }
@@ -603,16 +596,16 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         let raw_tx = tx.tx;
         let in_active_chain = tx.height != 0;
         let hex = serialize_hex(&raw_tx);
-        let txid = raw_tx.compute_txid().to_string();
+        let txid = raw_tx.compute_txid();
 
         let mut block_hash = None;
         let mut block_time = None;
-        let mut transaction_time = None;
+        let mut time = None;
         let mut confirmations = Some(0);
         if in_active_chain {
             confirmations = self.chain.get_height().ok().and_then(|tip| {
                 if tip >= tx.height {
-                    Some((tip - tx.height + 1).into())
+                    Some(i64::from(tip - tx.height + 1))
                 } else {
                     None
                 }
@@ -620,9 +613,9 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
 
             if let Ok(hash) = self.chain.get_block_hash(tx.height) {
                 if let Ok(header) = self.chain.get_block_header(&hash) {
-                    block_hash = Some(header.block_hash().to_string());
-                    block_time = Some(header.time.into());
-                    transaction_time = Some(header.time.into());
+                    block_hash = Some(header.block_hash());
+                    block_time = Some(u64::from(header.time));
+                    time = Some(u64::from(header.time));
                 }
             }
         }
@@ -633,16 +626,16 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             txid,
             hash: raw_tx.compute_wtxid().to_string(),
             size: raw_tx.total_size().try_into()?,
-            vsize: raw_tx.vsize().try_into()?,
+            v_size: raw_tx.vsize().try_into()?,
             weight: raw_tx.weight().to_wu(),
-            version: raw_tx.version.0,
-            lock_time: raw_tx.lock_time.to_consensus_u32(),
-            inputs: raw_tx
+            version: raw_tx.version.0 as u32,
+            lock_time: u64::from(raw_tx.lock_time.to_consensus_u32()),
+            vin: raw_tx
                 .input
                 .iter()
                 .map(|input| self.make_vin(input.clone(), raw_tx.is_coinbase()))
                 .collect(),
-            outputs: raw_tx
+            vout: raw_tx
                 .output
                 .into_iter()
                 .enumerate()
@@ -654,7 +647,8 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             block_hash,
             confirmations,
             block_time,
-            transaction_time,
+            time,
+            vsize_adjusted: None,
         })
     }
 

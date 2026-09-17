@@ -4,10 +4,12 @@ use core::fmt::Debug;
 
 use bitcoin::BlockHash;
 use bitcoin::Txid;
-use corepc_types::v29::GetTxOut;
-use corepc_types::v30::GetAddrManInfo;
-use corepc_types::v30::GetBlockchainInfo;
-use corepc_types::v30::GetDeploymentInfo;
+use ethos_bitcoind::GetAddrManInfo;
+use ethos_bitcoind::GetBlockchainInfo;
+use ethos_bitcoind::GetDeploymentInfo;
+use ethos_bitcoind::GetTxOut;
+#[cfg(test)]
+use ethos_bitcoind::ScriptPubKey;
 use serde::Serialize;
 use serde::de::Deserialize;
 use serde::de::DeserializeOwned;
@@ -521,6 +523,7 @@ mod tests {
             time: 0,
             verification_progress: 1.0,
             warnings: vec![],
+            backgroundvalidation: None,
         };
         let expected_result = serde_json::to_value(get_blockchain_info_res).unwrap();
         client.set_result(expected_result.clone());
@@ -848,16 +851,14 @@ mod tests {
         let expected_result = GetTxOut {
             best_block: "best_block".to_string(),
             confirmations: 10,
-            value: 0.1,
+            value: bitcoin::Amount::from_sat(10_000_000),
             coinbase: false,
-            script_pubkey: corepc_types::ScriptPubKey {
+            script_pubkey: ScriptPubKey {
                 address: Some("address".to_string()),
                 asm: "asm".to_string(),
                 hex: "hex".to_string(),
-                type_: "type".to_string(),
-                addresses: None,
-                descriptor: None,
-                required_signatures: None,
+                r#type: "type".to_string(),
+                desc: "raw(hex)".to_string(),
             },
         };
         client.set_result(serde_json::to_value(&expected_result).unwrap());

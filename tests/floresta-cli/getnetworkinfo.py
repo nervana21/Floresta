@@ -26,6 +26,9 @@ EXPECTED_KEYS = {
     "relayfee",
     "incrementalfee",
     "localaddresses",
+    # Core 32+ OpenRPC keys. Floresta stubs empty map / zero (no INV buckets yet).
+    "inv_buckets",
+    "tx_send_rate",
     "warnings",
 }
 
@@ -76,11 +79,13 @@ def test_get_network_info(florestad_node):
     assert info["connections_in"] == 0
     assert info["connections_out"] == 0
 
-    # Floresta doesn't track these — must be present, must be zero/empty.
+    # Floresta doesn't track these. Must be present, must be zero/empty.
     assert info["timeoffset"] == 0
     assert info["relayfee"] == 0
     assert info["incrementalfee"] == 0
     assert info["localaddresses"] == []
+    assert info["inv_buckets"] == {}
+    assert info["tx_send_rate"] == 0
     assert info["warnings"] == []
 
     # All 5 Core networks must be listed, in the documented order.

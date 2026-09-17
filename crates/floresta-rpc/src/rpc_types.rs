@@ -6,10 +6,10 @@ use core::fmt::Display;
 use core::fmt::Formatter;
 use std::path::PathBuf;
 
-use corepc_types::v30::GetBlockHeaderVerbose;
-use corepc_types::v30::GetBlockVerboseOne;
-pub use corepc_types::v30::GetNetworkInfo;
-use corepc_types::v31::GetRawTransactionVerbose;
+use ethos_bitcoind::GetBlockHeaderVerbose;
+use ethos_bitcoind::GetBlockVerboseOne;
+pub use ethos_bitcoind::GetNetworkInfo;
+use ethos_bitcoind::GetRawTransactionVerbose;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -244,3 +244,33 @@ impl Display for AddNodeCommand {
 }
 
 impl error::Error for Error {}
+
+#[cfg(test)]
+mod ethos_wire_tests {
+    use bitcoin::Amount;
+    use ethos_bitcoind::{GetTxOut, ScriptPubKey};
+    use serde_json::json;
+
+    #[test]
+    fn get_tx_out_serializes_amount_as_btc_float_and_omits_none() {
+        let out = GetTxOut {
+            best_block: "00".repeat(32),
+            confirmations: 1,
+            value: Amount::from_sat(50_000_000),
+            script_pubkey: ScriptPubKey {
+                asm: String::new(),
+                desc: "raw(00)".to_string(),
+                hex: "00".to_string(),
+                r#type: "nulldata".to_string(),
+                address: None,
+            },
+            coinbase: true,
+        };
+        let v = serde_json::to_value(&out).expect("serialize GetTxOut");
+        assert_eq!(v["value"], json!(0.5));
+        assert!(
+            v["scriptPubKey"].get("address").is_none(),
+            "nested Option None must omit, not null: {v}"
+        );
+    }
+}
