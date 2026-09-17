@@ -494,9 +494,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             hash: target_hash.to_string(),
             height: u64::from(height),
             deployments,
-            // Core requires script_flags; Floresta does not yet expose per-block
-            // script verify flags (empty stub until modeled).
-            script_flags: Vec::new(),
+            script_flags: Self::script_flags_at(self.network, height),
         })
     }
 
@@ -518,6 +516,31 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
     // getmempoolentry
     // getmempoolinfo
     // getrawmempool
+
+    /// Script-verify flag names active at `height` (Core `getdeploymentinfo.script_flags`).
+    ///
+    /// Built from buried softfork heights. BIP9 (`taproot`, …) is not modeled yet
+    /// (see `buried_deployments_for` TODO), so TAPROOT is omitted until that lands.
+    fn script_flags_at(network: Network, height: u32) -> Vec<String> {
+        let mut flags = vec!["P2SH".to_string()];
+
+        for &(name, activation_height) in buried_deployments_for(network) {
+            if height < activation_height {
+                continue;
+            }
+            match name {
+                "bip65" => flags.push("CHECKLOCKTIMEVERIFY".to_string()),
+                "csv" => flags.push("CHECKSEQUENCEVERIFY".to_string()),
+                "segwit" => {
+                    flags.push("WITNESS".to_string());
+                    flags.push("NULLDUMMY".to_string());
+                }
+                _ => {}
+            }
+        }
+
+        flags
+    }
 
     fn make_block_coinbase_tx(block: &Block) -> Result<GetBlockCoinbaseTx, JsonRpcError> {
         let coinbase = block.txdata.first().ok_or(JsonRpcError::Chain)?;
