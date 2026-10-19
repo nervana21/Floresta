@@ -100,4 +100,4 @@ lto = true        # enable link-time optimizations
 codegen-units = 1 # compile a single codegen unit
 
 [patch.crates-io]
-bitcoinkernel = { git = "https://github.com/nervana21/rust-bitcoinkernel", rev = "0a6c42520c8614b1d3a09ee9f4b40600a6b8b81e" }
+bitcoinkernel = { git = "https://github.com/nervana21/rust-bitcoinkernel", rev = "3ea1f48fc5626ad389b0017b580c051f26640c87" }
