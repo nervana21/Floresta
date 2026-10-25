@@ -37,6 +37,7 @@ use bitcoin::Transaction;
 use bitcoin::Txid;
 use bitcoin::Work;
 use bitcoin::block::Header as BlockHeader;
+use bitcoin::blockdata::constants::DIFFCHANGE_INTERVAL;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::Hash;
 use bitcoin::hashes::sha256;
@@ -222,25 +223,27 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
     }
 
     fn validate_header(&self, block_header: &BlockHeader) -> Result<BlockHash, BlockchainError> {
+        // As in Core, the header's own proof of work comes first: it is the cheap check, and the
+        // ones below read the chain.
+        let block_hash = block_header
+            .validate_pow(block_header.target())
+            .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
+
         let prev_block = self.get_disk_block_header(&block_header.prev_blockhash)?;
         let height = prev_block
             .height()
             .ok_or(BlockValidationErrors::BlockExtendsAnOrphanChain)?
             + 1;
 
-        // Check pow
+        // Like Core's `bad-diffbits`, the compact bits must match exactly: a harder target
+        // than the required one is invalid too.
         let expected_target = self.get_next_required_work(&prev_block, height, block_header)?;
-
-        let actual_target = block_header.target();
-        if actual_target > expected_target {
-            Err(BlockValidationErrors::NotEnoughPow)?;
+        if block_header.bits != expected_target.to_compact_lossy() {
+            Err(BlockValidationErrors::BadDiffBits)?;
         }
 
         self.check_bip94_block(block_header, height)?;
 
-        let block_hash = block_header
-            .validate_pow(actual_target)
-            .map_err(|_| BlockValidationErrors::NotEnoughPow)?;
         Ok(block_hash)
     }
 
@@ -1006,12 +1009,16 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         // Regtest don't have retarget
         if !params.params.no_pow_retargeting {
-            // First block in this epoch
-            let first_block = self.get_header_by_height(next_height - 2016)?;
-            let last_block = self.get_header_by_height(next_height - 1)?;
+            // Core reads both ends of the epoch from the new header's own ancestors
+            // (`pindexLast->GetAncestor`), and the parent may be on a fork.
+            let first_block = self.get_ancestor_at_height(
+                last_block,
+                next_height - 1,
+                next_height - DIFFCHANGE_INTERVAL,
+            )?;
 
             let target =
-                Consensus::calc_next_work_required(&last_block, &first_block, self.chain_params());
+                Consensus::calc_next_work_required(last_block, &first_block, self.chain_params());
 
             if target < params.params.max_attainable_target {
                 return Ok(target);
@@ -1021,6 +1028,28 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
         }
 
         Ok(last_block.target())
+    }
+
+    /// Returns the ancestor of `header` at `target_height`, where `header` is at `header_height`.
+    ///
+    /// The height index only knows the best chain, so it is used when `header` is on it. Otherwise
+    /// this follows `prev_blockhash`, which is also right for a header on a fork.
+    fn get_ancestor_at_height(
+        &self,
+        header: &BlockHeader,
+        header_height: u32,
+        target_height: u32,
+    ) -> Result<BlockHeader, BlockchainError> {
+        if self.get_block_hash(header_height).ok() == Some(header.block_hash()) {
+            return Ok(*self.get_header_by_height(target_height)?);
+        }
+
+        let mut ancestor = *header;
+        for _ in target_height..header_height {
+            ancestor = *self.get_disk_block_header(&ancestor.prev_blockhash)?;
+        }
+
+        Ok(ancestor)
     }
 
     /// Check timestamp against prev for difficulty-adjustment blocks to prevent timewarp attacks.
@@ -1034,7 +1063,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
             return Ok(());
         }
 
-        let prev_header = self.get_header_by_height(height - 1)?;
+        let prev_header = self.get_disk_block_header(&block.prev_blockhash)?;
         Ok(Consensus::check_bip94_time(block, &prev_header)?)
     }
 
@@ -1096,6 +1125,11 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
 
     fn size_on_disk(&self) -> Result<u64, Self::Error> {
         Ok(read_lock!(self).chainstore.size_on_disk()?)
+    }
+
+    fn get_mtp_by_height(&self, height: u32) -> Result<u32, Self::Error> {
+        let header = *self.get_header_by_height(height)?;
+        self.median_time_past(header)
     }
 
     fn get_fork_point(&self, block: BlockHash) -> Result<BlockHash, Self::Error> {
@@ -1456,8 +1490,8 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
             .any(|subscriber| subscriber.wants_spent_utxos())
             .then(|| inputs.clone());
 
-        self.validate_block_no_acc(block, height, inputs)?;
         let acc = Consensus::update_acc(&self.acc(), block, height, proof, del_hashes)?;
+        self.validate_block_no_acc(block, height, inputs)?;
 
         self.update_view(height, &block.header, acc)?;
 
@@ -1657,10 +1691,13 @@ mod test {
     use crate::AssumeValidArg;
     use crate::BlockchainError;
     use crate::ChainStore;
+    use crate::CompactLeafData;
     use crate::FlatChainStore;
     use crate::FlatChainStoreConfig;
+    use crate::ScriptPubKeyKind;
     use crate::extensions::WorkExt;
     use crate::prelude::HashMap;
+    use crate::proof_util::process_proof;
     use crate::pruned_utreexo::consensus::Consensus;
     use crate::pruned_utreexo::error::BlockValidationErrors;
     use crate::pruned_utreexo::utxo_data::UtxoData;
@@ -1902,6 +1939,129 @@ mod test {
         }
 
         prev_hash
+    }
+
+    fn assert_malleated_leaf_rejects_proof(malleate_script: bool) {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let mut parent = genesis_block(Network::Regtest).block_hash();
+        let mut funding_outpoint = OutPoint::null();
+
+        // Only height 1 adds a spendable output, so its proof has target 0 and no siblings.
+        for height in 1..=100 {
+            let mut coinbase = test_coinbase(height, Sequence::MAX, LockTime::ZERO);
+            if height == 1 {
+                coinbase.output = vec![txout!(1, anyone_can_spend_script())];
+                funding_outpoint = OutPoint::new(coinbase.compute_txid(), 0);
+            }
+            let mut block = block_with_coinbase(height, coinbase);
+            block.header.prev_blockhash = parent;
+            while block.header.validate_pow(block.header.target()).is_err() {
+                block.header.nonce += 1;
+            }
+            chain.accept_header(block.header).unwrap();
+            chain
+                .connect_block(&block, Proof::default(), HashMap::new(), Vec::new())
+                .unwrap();
+            parent = block.block_hash();
+        }
+
+        let spend = Transaction {
+            version: TransactionVersion::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![txin!(funding_outpoint, ScriptBuf::new(), Sequence::MAX)],
+            output: vec![txout!(1, ScriptBuf::new_op_return([0]))],
+        };
+        let mut block = block_with_transactions(
+            101,
+            vec![test_coinbase(101, Sequence::MAX, LockTime::ZERO), spend],
+        );
+        block.header.prev_blockhash = parent;
+        while block.header.validate_pow(block.header.target()).is_err() {
+            block.header.nonce += 1;
+        }
+        chain.accept_header(block.header).unwrap();
+
+        let honest_leaf = CompactLeafData {
+            header_code: (1 << 1) | 1,
+            amount: 1,
+            spk_ty: ScriptPubKeyKind::Other(anyone_can_spend_script().into_bytes().into()),
+        };
+        let mut malicious_leaf = honest_leaf.clone();
+        if malleate_script {
+            malicious_leaf.spk_ty =
+                ScriptPubKeyKind::Other(ScriptBuf::new_op_return([42]).into_bytes().into());
+        } else {
+            // Claim the otherwise mature coinbase was created in the previous block.
+            malicious_leaf.header_code = (100 << 1) | 1;
+        }
+        let proof = Proof {
+            targets: vec![0],
+            hashes: Vec::new(),
+        };
+        let (bad_hashes, bad_inputs) = process_proof(
+            &[malicious_leaf],
+            &block.txdata,
+            101,
+            |height| chain.get_block_hash(height),
+            |height| chain.get_mtp_by_height(height),
+        )
+        .unwrap();
+
+        // These unauthenticated inputs would fail consensus checks if checked first.
+        let validation_error = chain
+            .validate_block_no_acc(&block, 101, bad_inputs.clone())
+            .unwrap_err();
+        assert!(
+            matches!(validation_error, BlockchainError::TransactionError(_)),
+            "expected a transaction failure from malleated leaf data: {validation_error:?}"
+        );
+
+        let acc = chain.acc();
+        let error = chain
+            .connect_block(&block, proof.clone(), bad_inputs, bad_hashes)
+            .unwrap_err();
+        // The wire layer retries and bans the proof peer for AccumulatorError, whereas
+        // TransactionError would invalidate this perfectly valid block.
+        assert!(
+            matches!(error, BlockchainError::AccumulatorError(_)),
+            "must reject the proof, not the block: {error:?}"
+        );
+        assert_eq!(chain.acc(), acc);
+        assert_eq!(chain.get_validation_index().unwrap(), 100);
+        assert!(matches!(
+            chain.get_disk_block_header(&block.block_hash()).unwrap(),
+            DiskBlockHeader::HeadersOnly(_, 101)
+        ));
+
+        // An honest peer can supply the original leaf and connect the exact same block.
+        let (hashes, inputs) = process_proof(
+            &[honest_leaf],
+            &block.txdata,
+            101,
+            |height| chain.get_block_hash(height),
+            |height| chain.get_mtp_by_height(height),
+        )
+        .unwrap();
+        assert_eq!(
+            chain.connect_block(&block, proof, inputs, hashes).unwrap(),
+            101
+        );
+        assert_eq!(chain.get_validation_index().unwrap(), 101);
+        assert!(matches!(
+            chain.get_disk_block_header(&block.block_hash()).unwrap(),
+            DiskBlockHeader::FullyValid(_, 101)
+        ));
+    }
+
+    #[test]
+    fn malleated_creation_height_rejects_proof_not_block() {
+        assert_malleated_leaf_rejects_proof(false);
+    }
+
+    #[test]
+    #[cfg(feature = "bitcoinkernel")]
+    fn malleated_other_script_rejects_proof_not_block() {
+        assert_malleated_leaf_rejects_proof(true);
     }
 
     #[test]
@@ -2234,6 +2394,173 @@ mod test {
         assert_eq!(
             required_bits(&chain, &last, 4, last.time + 10 * 60),
             TESTNET_POW_LIMIT_BITS
+        );
+    }
+
+    /// A chain of `network` with `2015` headers at the pow limit, and a header at height 2015
+    /// that is a sibling of the best tip, stored as a fork and mined an hour earlier.
+    fn chain_with_fork_at_height_2015(
+        network: Network,
+    ) -> (ChainState<FlatChainStore>, Vec<BlockHeader>, BlockHeader) {
+        let chain = setup_test_chain(network, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(&chain, network, &[TESTNET_POW_LIMIT_BITS; 2015]);
+
+        let fork = BlockHeader {
+            time: headers[2015].time - 3600,
+            nonce: 1,
+            ..headers[2015]
+        };
+        write_lock!(chain)
+            .chainstore
+            .save_header(&DiskBlockHeader::InFork(fork, 2015))
+            .unwrap();
+
+        (chain, headers, fork)
+    }
+
+    #[test]
+    fn retarget_is_computed_from_the_parents_own_ancestors() {
+        let (chain, headers, fork) = chain_with_fork_at_height_2015(Network::Testnet);
+        let child = BlockHeader {
+            prev_blockhash: fork.block_hash(),
+            time: fork.time + 600,
+            ..fork
+        };
+
+        // Core: `pindexLast->GetAncestor`, so the epoch ends at the fork, not at the best tip
+        let on_fork = Consensus::calc_next_work_required(&fork, &headers[0], chain.chain_params());
+        let on_best =
+            Consensus::calc_next_work_required(&headers[2015], &headers[0], chain.chain_params());
+        assert_ne!(on_fork, on_best);
+
+        assert_eq!(
+            chain
+                .get_next_required_work(&fork, DIFFCHANGE_INTERVAL, &child)
+                .unwrap()
+                .to_compact_lossy(),
+            on_fork.to_compact_lossy()
+        );
+    }
+
+    #[test]
+    fn bip94_time_is_checked_against_the_parent_on_a_fork() {
+        let (chain, _, fork) = chain_with_fork_at_height_2015(Network::Testnet4);
+        let child = BlockHeader {
+            prev_blockhash: fork.block_hash(),
+            time: fork.time + 10,
+            ..fork
+        };
+
+        // The best tip is an hour later than the fork, which would make this child too early
+        assert!(chain.check_bip94_block(&child, DIFFCHANGE_INTERVAL).is_ok());
+    }
+
+    /// A regtest child of genesis with the given bits and a valid proof of work.
+    fn mined_regtest_child(bits: u32) -> BlockHeader {
+        let genesis = genesis_block(Network::Regtest).header;
+        let mut header = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis.block_hash(),
+            merkle_root: genesis.merkle_root,
+            time: genesis.time + 600,
+            bits: CompactTarget::from_consensus(bits),
+            nonce: 0,
+        };
+        while header.validate_pow(header.target()).is_err() {
+            header.nonce += 1;
+        }
+        header
+    }
+
+    #[test]
+    fn accept_header_rejects_harder_bits_than_required() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let genesis = genesis_block(Network::Regtest);
+
+        // Regtest requires 0x207fffff. This target is 128 times smaller (about 256 hashes to
+        // mine, against 2) and the proof of work is valid for it, but Core rejects it with
+        // `bad-diffbits`.
+        let header = mined_regtest_child(0x2000_ffff);
+
+        assert!(matches!(
+            chain.accept_header(header),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::BadDiffBits
+            ))
+        ));
+        assert_eq!(chain.get_best_block().unwrap(), (0, genesis.block_hash()));
+        assert!(chain.get_disk_block_header(&header.block_hash()).is_err());
+    }
+
+    #[test]
+    fn accept_header_accepts_exactly_the_required_bits() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+
+        let header = mined_regtest_child(EASIEST_REGTEST_TARGET_BITS);
+
+        chain.accept_header(header).unwrap();
+        assert_eq!(chain.get_best_block().unwrap(), (1, header.block_hash()));
+    }
+
+    #[test]
+    fn header_pow_is_checked_before_the_required_bits() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let genesis = genesis_block(Network::Regtest).header;
+
+        // Wrong bits, and a proof of work that does not meet them: Core reports `high-hash`
+        // from `CheckBlockHeader` before it looks at the bits.
+        let mut header = BlockHeader {
+            version: HeaderVersion::TWO,
+            prev_blockhash: genesis.block_hash(),
+            merkle_root: genesis.merkle_root,
+            time: genesis.time + 600,
+            bits: CompactTarget::from_consensus(0x2000_ffff),
+            nonce: 0,
+        };
+        while header.validate_pow(header.target()).is_ok() {
+            header.nonce += 1;
+        }
+
+        assert!(matches!(
+            chain.accept_header(header),
+            Err(BlockchainError::BlockValidation(
+                BlockValidationErrors::NotEnoughPow
+            ))
+        ));
+    }
+
+    #[test]
+    fn ancestor_at_height_follows_a_fork() {
+        let chain = setup_test_chain(Network::Regtest, AssumeValidArg::Disabled, None);
+        let headers = store_headers_with_bits(&chain, Network::Regtest, &[0x207f_ffff; 5]);
+
+        // A fork from height 2, with different headers at heights 3, 4 and 5
+        let mut forks = vec![headers[2]];
+        for height in 3..=5_u32 {
+            let parent = forks.last().unwrap();
+            let fork = BlockHeader {
+                prev_blockhash: parent.block_hash(),
+                nonce: 100 + height,
+                ..headers[height as usize]
+            };
+            write_lock!(chain)
+                .chainstore
+                .save_header(&DiskBlockHeader::InFork(fork, height))
+                .unwrap();
+            forks.push(fork);
+        }
+        let (fork3, fork5) = (forks[1], forks[3]);
+        assert_ne!(fork3, headers[3]);
+
+        assert_eq!(chain.get_ancestor_at_height(&fork5, 5, 3).unwrap(), fork3);
+        assert_eq!(
+            chain.get_ancestor_at_height(&fork5, 5, 2).unwrap(),
+            headers[2]
+        );
+        // On the best chain it reads the height index
+        assert_eq!(
+            chain.get_ancestor_at_height(&headers[5], 5, 3).unwrap(),
+            headers[3]
         );
     }
 
